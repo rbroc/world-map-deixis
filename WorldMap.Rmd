@@ -1,0 +1,219 @@
+---
+title: "DemsWorldMap"
+output: html_document
+encoding: 'utf-8'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Load dataset, preprocess, keep only relevant columns
+``` {r LoadData}
+library(xlsx)
+
+Sys.setlocale(category="LC_ALL", locale = "en_US.UTF-8")
+
+#Load the dataset 
+df <- read.xlsx("DemsLangDataset.xlsx", sheetIndex=1, header = T)
+
+# Keep only relevant columns / rows
+df <- df[,c('LANGUAGE', 'GEODRYER', 'GEONICHOLS', 'STOCK', 'COORDINATES', 'DISTANCE.CONTRAST', 'ORIENTATION')]
+df <- df[complete.cases(df), ]
+
+head(df)
+```
+
+### Split coordinates into Latitude and Longitude and encode them as negative/positive coordinates
+``` {r SplitCoordinates}
+library(tidyr)
+
+# Split coordinates into latitude and longitude
+vars = c('Lat', 'Long')
+df <- separate(df, COORDINATES, into = vars, sep = " ")
+
+# Create columns with index for positive/negative longitude and latitude based on South/North and East/West indices 
+df$DirLat <- ifelse(grepl('S', df$Lat) == TRUE, -1, 1)
+df$DirLong <- ifelse(grepl('E', df$Long) == TRUE, 1, -1)
+
+# Get rid of cardinal points (info stored in DirLat and DirLong)
+df$Lat <- gsub("['S]", "", df$Lat)
+df$Lat <- gsub("['N]", "", df$Lat)
+df$Long <- gsub("['E]", "", df$Long)
+df$Long <- gsub("['W]", "", df$Long)
+
+head(df)
+```
+
+### Split both Latitude and Longitude into Degrees and Minutes
+```{r SplitGradesPrimes}
+
+# Get rid of some character noise
+df$Long <- gsub(",", "", df$Long)
+df$Lat <- gsub(",", "", df$Lat)
+
+# Create columns for split
+sub_Lat <- c('Lat_Deg', 'Lat_Min')
+sub_Long <- c('Long_Deg', 'Long_Min')
+
+# Split degrees and minutes based on comma
+df <- separate(df, Lat, into = sub_Lat, sep = "°")
+df <- separate(df, Long, into = sub_Long, sep ="°")
+
+# Some minutes rows have no values because their coordinate is an integer. Just set them to 0.
+df$Lat_Min[df$Lat_Min == ''] <- 0
+df$Long_Min[df$Long_Min == ''] <- 0
+
+head(df)
+```
+
+## Now take it all back to two Latitude and Longitude column in degrees + decimals
+``` {r CoordToDecimals}
+
+# Convert minutes to decimals
+df$Lat_Min <- as.numeric(df$Lat_Min) / 60
+df$Long_Min <- as.numeric(df$Long_Min) / 60
+
+# Reformat stuff 
+df$Lat_Deg <- as.numeric(df$Lat_Deg)
+df$Long_Deg <- as.numeric(df$Long_Deg)
+
+# South / North to pos neg 
+df$Lat_Deg <- df$Lat_Deg * df$DirLat
+df$Lat_Min <- df$Lat_Min * df$DirLat
+df$Long_Deg <- df$Long_Deg * df$DirLong
+df$Long_Min <- df$Long_Min * df$DirLong
+
+# Sum degrees and decimal minutes
+df$Lat <- df$Lat_Deg + df$Lat_Min
+df$Long <- df$Long_Deg + df$Long_Min
+
+head(df)
+```
+
+### Some more processing + split into categories based on contrast number
+``` {r}
+
+library(plyr)
+
+# Get rid of all useless columns and rename
+df <- df[, c("LANGUAGE",'GEODRYER', 'GEONICHOLS', 'STOCK', "Lat", "Long", "DISTANCE.CONTRAST", 'ORIENTATION')]
+colnames(df) <- c("Lang", 'GeoDryer', 'GeoNichols', 'Stock', "Lat", "Long", "Contrasts", "Orientation")
+
+# Apparently it has to be done in this cumbersome way, yes
+df$Contrasts <- as.character(df$Contrasts)
+df <- subset(df, df$Contrasts %in% c('1','2','3','4','5','6'))
+df$Contrasts <- as.numeric(df$Contrasts)
+
+# Split into three categories (less, equal or more than 3 contrast)
+df$Categories[df$Contrasts < 3] <- -1
+df$Categories[df$Contrasts == 3] <- 0
+df$Categories[df$Contrasts > 3] <- 1
+
+# Categories as factor (for the map thing)
+df$Categories <- as.factor(df$Categories)
+
+# Rename
+df$Categories <- revalue(df$Categories, c("-1" ="Less than 3", "0" = 'Exactly 3', "1" = 'More than 3'))
+
+head(df)
+```
+
+### DRAW THE MAP!
+``` {r WorldMap}
+
+library(ggmap)
+library(maps)
+library(maptools)
+
+#df$Contrasts <- as.factor(df$Contrasts)
+
+# Create map dummy object
+world_map <- NULL
+
+# Set type of map, colours of boundaires and fill
+mapWorld <- borders("world", colour="gray50", fill="gray50")
+
+# Store plot into world_map
+world_map <- ggplot() +   mapWorld
+
+# Set colorPalette and take n colors from it
+# colfunc<-colorRampPalette(c("green","yellow","red"))
+#col = colfunc(3)
+
+# Choose colors
+col <- c("green", "yellow", "red")
+
+# Plot points with x=Longitude and y=Latitude. Colors by contrast category
+world_map <- world_map + geom_point(aes(x=df$Long, y=df$Lat, color=df$Categories), size=2) +
+  scale_colour_manual(values = col, 
+                      name  ="# Contrasts",  
+                      breaks = c("Less than 3", "Exactly 3", "More than 3"), 
+                      labels = c("Less than 3", "Exactly 3", "More than 3")) +
+                      xlab("Longitude") +
+                      ylab("Latitude") +
+                      labs(title="Demonstratives World Map")
+
+ggsave("world_map.png", plot = world_map, width = 21.6, height = 10.8, units = 'in',  dpi=100)
+ggsave("world_map2.png", plot = world_map, width = 28.8, height = 14.4, units = 'in',  dpi=100)
+
+                        
+world_map
+```
+
+
+
+### Attempt at interactive plot
+``` {r PlotInter}
+library(plotly)
+
+
+# geo styling
+g <- list(
+  showland = T,
+  landcolor = toRGB("gray90"),
+  subunitcolor = toRGB("gray90"),
+  countrycolor = toRGB("white")
+)
+
+# Make interactive plot!
+int_plot <- plot_geo(df, lat = ~Lat, lon = ~Long) %>%
+  add_markers(text = ~paste(Lang, paste("GeoDryer: ", GeoDryer), 
+                            paste("GeoNichols: ", GeoNichols), 
+                            paste("Stock: ", Stock), 
+                            paste("Latitude: ", round(Lat, 2)), 
+                            paste("Longitude: ", round(Long, 2)), 
+                            paste("Nr Contrasts:", Contrasts), 
+                            paste("Orientation: ", Orientation), 
+                            sep = "<br />"),
+              color = ~Categories, colors = col, hoverinfo = "text"
+  ) %>%
+  add_annotations(text="# Contrasts", xref="paper", yref="paper",
+                  x=1.02, xanchor="left",
+                  y=0.8, yanchor="bottom",    # Same y as legend below
+                  legendtitle=TRUE, showarrow=FALSE ) %>%
+  layout(
+    title = 'Demonstratives World Map<br />(Number of Contrasts)', 
+    xaxis = list(title = 'Longitude'), 
+    yaxis = list(title='Latitude'), 
+    geo = g,
+    legend = list(x = 1.02, y = 0.8, xanchor= 'left', yanchor = "top"),
+    autosize = F,
+    width = 1600,
+    height = 800
+  )
+
+
+# Display plot
+# int_plot
+
+# Save plot
+htmlwidgets::saveWidget(as_widget(int_plot), "world_map_interactive.html")
+```
+
+
+
+
+
+

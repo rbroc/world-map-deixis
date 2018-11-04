@@ -1,0 +1,314 @@
+---
+title: "Demonstratives - Cross-Linguistic Analysis"
+output: html_document
+---
+
+Cultural and geographical variables extracted from D-PLACE <http://d-place.info> and cross-referenced to demonstratives database via ISO codes.
+
+``` {r SetParameters,  warning = FALSE, message = FALSE}
+library(ggplot2)
+library(sjPlot)
+
+set_theme(geom.label.size = 3, 
+          axis.textsize = .9, 
+          axis.title.size = 1, 
+          theme.font = 'Andale Mono')
+
+```
+
+###Importing and visualizing the database structure
+```{r ImportDems, echo =FALSE, warning=FALSE, message = FALSE}
+
+# Import data from spreadsheet
+Sys.setlocale(category = "LC_ALL", locale = "da_dk.utf-8")
+Sys.setlocale(category = "LC_MESSAGES", locale = "da_dk.utf-8")
+Sys.setlocale(category = "LC_NUMERIC", locale = "da_dk.utf-8")
+
+library(readxl)
+dems <- read_xlsx(path  = '/Users/au571533/Dropbox/DemsLangMap/Analysis/data/DemsLangDataset.xlsx',sheet = 1)
+dems <- dems[is.na(dems$LANGUAGE) == FALSE,]
+
+# Fix some anomalies in the database structure
+dems <- dems[, c(1:15)] # Get rid of comments
+colnames(dems) <- c('Lang', 'Source', 'Wals', 'Coordinates', 'Geodryer', 'Geonichols', 'Stock', 
+                    'SyntFunc', 'NrCont', 'Orientation', 'Position', 'Visibility', 'BlockedView', 
+                    'Elevation', 'Direction') # Rename columns
+
+# Fill in the NAs (look one row up)
+dems$Wals <- zoo::na.locf(dems$Wals)
+dems$Source <- zoo::na.locf(dems$Source)
+dems$Coordinates <- zoo::na.locf(dems$Coordinates)
+
+# Let's take a look at the data
+head(dems)
+```
+
+###Overview of database (number of languages and missing data)
+```{r InfoData,  warning=FALSE, message = FALSE}
+# Let's extract some info on the database
+paste('There are', as.character(length(unique(dems$Lang))), 'languages', sep = ' ')
+
+# For how many languages do we miss data?
+mc <- nrow(subset(dems, SyntFunc == 'Pronominal' & (NrCont == 'NA'| NrCont == '?'))) 
+mo <- nrow(subset(dems, SyntFunc == 'Pronominal' & (Orientation == 'NA' | is.na(Orientation)| Orientation == '?')))
+md <- nrow(subset(dems, SyntFunc == 'Pronominal' & (Direction == 'NA' | is.na(Direction)| Direction == '?')))
+me <- nrow(subset(dems, SyntFunc == 'Pronominal' & (Elevation == 'NA' | is.na(Elevation)| Elevation == '?')))
+mv <- nrow(subset(dems, SyntFunc == 'Pronominal' & (Visibility == 'NA' | is.na(Visibility)| Visibility == '?')))
+mbv <- nrow(subset(dems, SyntFunc == 'Pronominal' & (BlockedView == 'NA' | is.na(BlockedView) | BlockedView == '?')))
+mp <- nrow(subset(dems, SyntFunc == 'Pronominal' & (Position == 'NA' | is.na(Position) | Position == '?')))
+
+# Display missing data
+paste('Missing data on nr contrasts:', as.character(mc), 'languages', sep = ' ')
+paste('Missing data on orientation:', as.character(mo), 'languages', sep = ' ')
+paste('Missing data on direction:', as.character(md), 'languages', sep = ' ')
+paste('Missing data on elevation:', as.character(me), 'languages', sep = ' ')
+paste('Missing data on visibility:', as.character(mv), 'languages', sep = ' ')
+paste('Missing data on blocked view:', as.character(mbv), 'languages', sep = ' ')
+paste('Missing data on position:', as.character(mp), 'languages', sep = ' ')
+
+# Plot number of contrasts
+nrCont <- ggplot(data = subset(dems, SyntFunc == 'Pronominal')) + geom_bar(aes(x = NrCont)) + xlab('') + ylab('Number of languages') + ggtitle('Frequency ~ number of contrasts')
+
+nrCont
+
+# Remove variables
+rm(mc, mo, md, me, mv, mbv, mp)
+```
+
+
+###Find out the ISO code whenever available
+Check out if we have all of them, if not cross-reference with Glottolog via API
+```{r ISOCode,  warning=FALSE, message = FALSE}
+
+library(lingtypology)
+
+# Reformat language names and strip all extra info
+dems$Lang <- Hmisc::capitalize(tolower(as.character(dems$Lang)))
+dems$Lang <- gsub(' .*', '', dems$Lang)
+
+# Extract ISO code from end of Wals string
+dems$Wals <- substr(dems$Wals, nchar(as.character(dems$Wals)) - 2, nchar(as.character(dems$Wals)))
+dems$Wals <- Xmisc::lstrip(dems$Wals, char ='_')
+
+# We miss some Wals codes: let's try to retrieve them
+unique(dems$Lang[dems$Wals == 'X'])
+
+# Change language names to some standardized name
+dems$Lang[dems$Lang == 'Saami'] <- 'Pite Sami'
+dems$Lang[dems$Lang == 'Dani'] <- 'Western Dani'
+dems$Lang[dems$Lang == 'Khimt\'anga'] <- 'Xamtanga'
+dems$Lang[dems$Lang == 'Komnzo'] <- 'Anta-Komnzo-Wara-Were-Kema'
+dems$Lang[dems$Lang == 'Keres'] <- 'Western Keres'
+dems$Lang[dems$Lang == 'Yauyos'] <- 'Huangascar-Topara-Yauyos Quechua'
+dems$Lang[dems$Lang == 'Mani'] <- 'Bullom So' #Is Mmani actually a dialect of this?
+dems <- subset(dems, Lang != 'NA')
+
+# Check whether there is still any missing value
+paste('Number of missing ISO codes:', as.character(nrow(subset(dems, Wals == 'X' | is.na(Wals)))), sep = ' ')
+
+# How many languages are we left with
+paste('Number of unique languages:', as.character(length(unique(dems$Lang))), sep = ' ')
+
+```
+
+
+### Merge this dataset with some extra information about environment and social features
+
+```{r LoadOtherDB,  warning=FALSE, message=FALSE}
+library(readr)
+
+# Read in and preprocess further linguistic data
+wals_extra <- wals.feature( features = c('37a', '43a', '45a'))
+wals_extra <- subset(wals_extra, wals.code %in% unique(dems$Wals))
+wals_extra <- wals_extra[, c(1, 4:6)]
+colnames(wals_extra) <- c('Wals', 'DefArt', 'ThirdPersonProns', 'PolitenessDistinction')
+dems <- merge(dems, wals_extra, by = 'Wals', all.x = TRUE)
+
+# Read in and preprocess environmental variables
+envParams <- data.frame(read_csv('/Users/au571533/Dropbox/DemsLangMap/Analysis/data/envParams.csv', skip = 1))
+envParams <- envParams[, c(1,2,12,13,14,15,16,17,19,20,22,23)]
+colnames(envParams) <- c('Source', 'SocName','GlottologCode', 'Lang', 'Wals', 'LangFam', 'AboveSeaVal', 'AboveSeaLegend', 'DistanceCoastVal', 'DistanceCoastLegend', 'MeanInclineVal', 'MeanInclineLegend')
+
+# Read in the social variables
+# Read in and preprocess social data
+socParams <- data.frame(read_csv('/Users/au571533/Dropbox/DemsLangMap/Analysis/data/socParams.csv', skip = 1))
+socParams <- socParams[, c(1,2,12,13,14,15,16,17,18,22,23,24,28,29,30,34,35,36,40,41,42)]
+colnames(socParams) <- c('Source', 'SocName','GlottologCode', 'Lang', 'Wals', 'LangFam', 'ClassYear', 'ClassVal', 'ClassLegend', 'PopYear', 'PopVal', 'PopLegend', 'RigidityYear', 'RigidityVal', 'RigidityLegend', 'MeanSizeYear', 'MeanSizeVal', 'MeanSizeLegend', 'Class2Year', 'Class2Val', 'Class2Legend')
+
+# Now merge with the demonstratives
+dems <- merge(dems, envParams[, c(1, 5,7:12)], by = c('Wals'), all.x = TRUE)
+dems <- merge(dems, socParams[, c(1, 5,7:21)], by = c('Wals'), all.x = TRUE)
+
+```
+
+
+###Converting dataset coordiantes
+
+``` {r ReshapingCoordinates,  message = FALSE}
+
+# Edit coordinates
+vars = c('Lat', 'Long')
+dems <- tidyr::separate(data = dems, col = Coordinates, into = vars, sep = " ")
+dems$DirLat <- ifelse(grepl('S', dems$Lat) == TRUE, -1, 1)
+dems$DirLong <- ifelse(grepl('E', dems$Long) == TRUE, 1, -1)
+# Replace weird characters
+dems$Lat <- gsub("['S,]", "", dems$Lat)
+dems$Lat <- gsub("['N,]", "", dems$Lat)
+dems$Long <- gsub("['E]", "", dems$Long)
+dems$Long <- gsub("['W]", "", dems$Long)
+dems$Long <- gsub(",,", ",", dems$Long)
+dems$Lat <- gsub(",,", ",", dems$Lat)
+
+# Split into two measures
+sub_Lat <- c('Lat_Deg', 'Lat_Min')
+sub_Long <- c('Long_Deg', 'Long_Min')
+dems <- tidyr::separate(dems, Lat, into = sub_Lat, sep = "°")
+dems <- tidyr::separate(dems, Long, into = sub_Long, sep ="°")
+
+# Compute in decimals
+dems$Lat_Min[dems$Lat_Min == '' | is.na(dems$Lat_Min)] <- 0
+dems$Long_Min[dems$Long_Min == ''| is.na(dems$Long_Min)] <- 0
+dems$Lat_Min <- as.numeric(dems$Lat_Min) / 60
+dems$Long_Min <- as.numeric(dems$Long_Min) / 60
+dems$Lat_Deg <- as.numeric(dems$Lat_Deg)
+dems$Long_Deg <- as.numeric(dems$Long_Deg)
+
+# South / North to pos neg and final processing 
+dems$Lat_Deg <- as.numeric(dems$Lat_Deg) * dems$DirLat
+dems$Lat_Min <- dems$Lat_Min * dems$DirLat
+dems$Long_Deg <- as.numeric(dems$Long_Deg) * dems$DirLong
+dems$Long_Min <- dems$Long_Min * dems$DirLong
+dems$Lat <- dems$Lat_Deg + dems$Lat_Min
+dems$Long <- dems$Long_Deg + dems$Long_Min
+
+```
+
+###Simplify contrast categories into simple (up to two 2, coded as 1), triadic (= 3), and complex ( > 3)
+``` {r PreprocFinal, echo = TRUE}
+
+# Drop zero contrast and NA
+dems <- subset(dems, NrCont %in% c(1:6))
+dems <- droplevels(dems)
+
+# Reshape the variable into dyadic, triadic and more than triadic
+dems$ContTr[(as.numeric(dems$NrCont)) == 1] <- '1'
+dems$ContTr[(as.numeric(dems$NrCont)) == 2] <- '2'
+dems$ContTr[(as.numeric(dems$NrCont)) == 3] <- '3'
+dems$ContTr[(as.numeric(dems$NrCont)) > 3] <- '3+'
+```
+
+###Visualize distribution of values from database
+``` {r PlotData,  message = FALSE}
+
+# Let's see how old our data are
+histYear <- ggplot(data = subset(dems, SyntFunc == 'Pronominal'  & Source.y == 'Ethnographic Atlas')) + geom_histogram(aes(x = ClassYear), binwidth = 20) + xlab('') + ylab('Year')
+
+# Distribution of distances from the coast, height and incline
+histIncline <- ggplot(data = subset(dems, SyntFunc == 'Pronominal' & Source.y == 'Ethnographic Atlas')) + geom_histogram(aes(x = MeanInclineVal)) + xlab('') + ylab('Mean Incline (degrees)') + ggtitle('Distribution values incline')
+histSea <- ggplot(data = subset(dems, SyntFunc == 'Pronominal' & Source.y == 'Ethnographic Atlas')) + geom_histogram(aes(x = AboveSeaVal)) + xlab('') + ylab('Meters above sea level') + ggtitle('Distribution values altitude')
+histCoast <- ggplot(data = subset(dems, SyntFunc == 'Pronominal' & Source.y == 'Ethnographic Atlas')) + geom_histogram(aes(x = DistanceCoastVal)) + xlab('') + ylab('Distance from coast (km)') + ggtitle('Distribution values distance from coast')
+
+histIncline
+histSea
+histCoast
+
+```
+
+###Plot geographical distributions of the features
+
+``` {r PlotEnv, message = FALSE}
+
+library(ggmap)
+library(maps)
+library(maptools)
+
+world_map <- NULL
+mapWorld <- borders("world", colour="gray50", fill="gray50")
+world_map <- ggplot() +   mapWorld
+
+# Define color palette
+colors = c('light blue', 'blue', 'dark blue')
+
+# Plot points with x=Longitude and y=Latitude. Colors by contrast category
+world_map <- world_map + geom_point(aes(x=dems$Long, y=dems$Lat, color=as.factor(dems$ContTr)), size=2) +
+scale_color_manual(values = colors, 
+                      name  ="# Contrasts") +
+                      xlab("") +
+                      ylab("") +
+                      labs(title="Number of Contrasts")
+                        
+world_map
+```
+
+###Plotting distribution of environmental variables (plotted in log-scale to make the colors more sensitive to variability in the lower end of the scale)
+``` {r PopSizePlot, message = FALSE}
+
+# New Map object
+world_map_incline <- ggplot() +   mapWorld
+world_map_height <- ggplot() + mapWorld
+
+# Plot points with x=Longitude and y=Latitude. Colors by contrast category
+world_map_incline <- world_map_incline + geom_point(aes(x=dems$Long, y=dems$Lat, color= log(dems$MeanInclineVal)), size=2) +
+                      xlab("") +
+                      ylab("") +
+                      labs(title="Distribution incline") +
+                      scale_color_continuous(name = 'Incline (logDegrees)', low = 'yellow', high = 'red')
+
+world_map_height <- world_map_height + geom_point(aes(x=dems$Long, y=dems$Lat, color= log(dems$AboveSeaVal)), size=2) +
+                      xlab("") +
+                      ylab("") +
+                      labs(title="Distribution altitude") +
+                      scale_color_continuous(name = 'Altitude (logMeters)', low = 'yellow', high = 'red')
+
+                        
+world_map_incline
+world_map_height
+
+```
+
+###Analysis
+``` {r RunAnalyses,  warning=FALSE, message = FALSE}
+
+library(dplyr)
+library(lme4)
+library(ordinal)
+
+# Is the number of contrast dependent on the incline of the terrain?
+binModEA <- ordinal::clmm(data = subset(dems, Source.y == 'Ethnographic Atlas' & SyntFunc %in% c('Adverbial','Pronominal')), as.factor(ContTr) ~ SyntFunc + AboveSeaVal + (1|Stock) + (1|Lang))
+
+binModEA2 <- ordinal::clmm(data = subset(dems, Source.y == 'Ethnographic Atlas' & SyntFunc %in% c('Pronominal', 'Adverbial')), as.factor(ContTr) ~ SyntFunc + MeanInclineVal + (1|Stock), control = clmm.control(method = "ucminf", maxIter = 10000))
+
+print('Results Model 1: Meters above sea level')
+summary(binModEA)
+print('Results Model 2: Mean incline')
+summary(binModEA2)
+
+# Validate with the Binford sample
+#print('Validating with other datasets')
+#binModBinford <- ordinal::clmm(data = subset(dems, Source.y == 'Binford Hunter-Gatherer' & SyntFunc %in% c('Adverbial','Pronominal')), as.factor(ContTr) ~ SyntFunc * MeanInclineVal + (1|Stock) + (1|Lang))
+#summary(binModBinford)
+
+```
+
+###Plot
+``` {r PlotData2, message = FALSE}
+library(dplyr)
+
+# Let's give the variables nicer names
+dems$Contrasts[dems$ContTr == 1] <- 'Two-way contrast'
+dems$Contrasts[dems$ContTr == 2] <- 'Three-way contrast'
+dems$Contrasts[dems$ContTr == 3] <- 'Above three'
+
+
+aggIncline <- subset(dems, SyntFunc %in% c('Pronominal', 'Adverbial') & Source.y == 'Ethnographic Atlas') %>% group_by(as.factor(Contrasts), SyntFunc) %>% summarize(MeanIncline = mean(MeanInclineVal), se = sd(MeanInclineVal) / sqrt(n()))
+colnames(aggIncline)[1] <- 'Contrasts'
+
+aggSeaLevel <- subset(dems, SyntFunc %in% c('Pronominal', 'Adverbial') & Source.y == 'Ethnographic Atlas') %>% group_by(as.factor(Contrasts), SyntFunc) %>% summarize(MeanAltitude = mean(AboveSeaVal), se = sd(AboveSeaVal) / sqrt(n()))
+colnames(aggSeaLevel)[1] <- 'Contrasts'
+
+ggplot(data = aggIncline) + geom_bar( aes(x = Contrasts, y = MeanIncline, fill = SyntFunc), position = 'dodge', stat = 'identity', alpha = 0.8)+ geom_errorbar(aes(x = Contrasts, group = SyntFunc, ymin = MeanIncline - se, ymax = MeanIncline + se), position = position_dodge(.9), size = 0.2, width = 0.2) + scale_fill_brewer(palette = 'Spectral')+ ggtitle('Nr constrasts ~ Incline') + xlab('') + ylab('Incline (degrees)')
+
+ggplot(data = aggSeaLevel) + geom_bar(aes(x = Contrasts, y = MeanAltitude, fill = SyntFunc), position = 'dodge', stat = 'identity', alpha = 0.8) + geom_errorbar(aes(x = Contrasts, group = SyntFunc, ymin = MeanAltitude - se, ymax = MeanAltitude + se), position = position_dodge(.9), size = 0.2, width = 0.2) + scale_fill_brewer(palette = 'Spectral') + ggtitle('Nr constrasts ~ Altitude') + xlab('') + ylab('Altitude (degrees)')
+
+```
+
